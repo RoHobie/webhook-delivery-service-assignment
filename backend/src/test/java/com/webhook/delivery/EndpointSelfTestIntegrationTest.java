@@ -4,7 +4,6 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import com.webhook.delivery.dto.CreateEndpointRequest;
 import com.webhook.delivery.dto.EndpointResponse;
 import com.webhook.delivery.dto.EndpointTestResultResponse;
-import com.webhook.delivery.repository.EndpointRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,9 +47,6 @@ class EndpointSelfTestIntegrationTest {
 
     @Autowired
     private TestRestTemplate restTemplate;
-
-    @Autowired
-    private EndpointRepository endpointRepository;
 
     private WireMockServer wireMockServer;
 
