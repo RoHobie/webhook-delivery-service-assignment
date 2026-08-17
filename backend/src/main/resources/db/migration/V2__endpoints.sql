@@ -1,0 +1,12 @@
+CREATE TABLE endpoints (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    url VARCHAR(2048) NOT NULL,
+    secret VARCHAR(255) NOT NULL,
+    subscribed_event_types TEXT NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_endpoints_tenant ON endpoints(tenant_id, status);
