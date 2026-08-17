@@ -120,6 +120,8 @@ class DeliveryVisibilityIntegrationTest {
         assertThat(pageDelivered).isNotNull();
         assertThat(pageDelivered.getContent()).hasSize(2);
         assertThat(pageDelivered.getTotalElements()).isEqualTo(2L);
+        assertThat(pageDelivered.getContent()).extracting(DeliveryResponse::getId).containsExactlyInAnyOrder(d1.getId(), d2.getId());
+        assertThat(pageDelivered.getContent()).extracting(DeliveryResponse::getId).doesNotContain(d3.getId());
 
         // Test GET /api/v1/deliveries/{id}/attempts for d1
         ResponseEntity<List<DeliveryAttemptResponse>> resAttempts = restTemplate.exchange(
