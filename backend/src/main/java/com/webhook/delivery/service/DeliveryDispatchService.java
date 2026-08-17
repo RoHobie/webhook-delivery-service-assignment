@@ -1,0 +1,109 @@
+package com.webhook.delivery.service;
+
+import com.webhook.delivery.domain.Delivery;
+import com.webhook.delivery.domain.DeliveryAttempt;
+import com.webhook.delivery.domain.Endpoint;
+import com.webhook.delivery.domain.WebhookEvent;
+import com.webhook.delivery.repository.DeliveryAttemptRepository;
+import com.webhook.delivery.repository.DeliveryRepository;
+import com.webhook.delivery.repository.EndpointRepository;
+import com.webhook.delivery.repository.WebhookEventRepository;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
+@Service
+public class DeliveryDispatchService {
+
+    private static final Logger log = LoggerFactory.getLogger(DeliveryDispatchService.class);
+
+    private final WebhookEventRepository eventRepository;
+    private final EndpointRepository endpointRepository;
+    private final DeliveryRepository deliveryRepository;
+    private final DeliveryAttemptRepository attemptRepository;
+    private final SignatureService signatureService;
+    private final OutboundHttpClient outboundHttpClient;
+
+    public DeliveryDispatchService(
+            WebhookEventRepository eventRepository,
+            EndpointRepository endpointRepository,
+            DeliveryRepository deliveryRepository,
+            DeliveryAttemptRepository attemptRepository,
+            SignatureService signatureService,
+            OutboundHttpClient outboundHttpClient) {
+        this.eventRepository = eventRepository;
+        this.endpointRepository = endpointRepository;
+        this.deliveryRepository = deliveryRepository;
+        this.attemptRepository = attemptRepository;
+        this.signatureService = signatureService;
+        this.outboundHttpClient = outboundHttpClient;
+    }
+
+    @Transactional
+    public void processDelivery(String deliveryId) {
+        Delivery delivery = deliveryRepository.findById(deliveryId).orElse(null);
+        if (delivery == null) {
+            return;
+        }
+
+        WebhookEvent event = eventRepository.findById(delivery.getEventId()).orElse(null);
+        Endpoint endpoint = endpointRepository.findById(delivery.getEndpointId()).orElse(null);
+
+        if (event == null || endpoint == null || "DISABLED".equalsIgnoreCase(endpoint.getStatus())) {
+            log.warn("Delivery {} aborted: event or endpoint missing/disabled", deliveryId);
+            delivery.setStatus("DEAD_LETTERED");
+            delivery.setLockedBy(null);
+            delivery.setLockedUntil(null);
+            delivery.setUpdatedAt(OffsetDateTime.now());
+            deliveryRepository.save(delivery);
+            return;
+        }
+
+        SignatureService.SignedHeaders signedHeaders = signatureService.generateSignature(
+                endpoint.getSecret(),
+                event.getPayload()
+        );
+
+        OutboundHttpClient.HttpResponseResult result = outboundHttpClient.sendWebhook(
+                endpoint.getUrl(),
+                event.getPayload(),
+                event.getType(),
+                delivery.getId(),
+                signedHeaders
+        );
+
+        int newAttemptCount = delivery.getAttemptCount() + 1;
+        delivery.setAttemptCount(newAttemptCount);
+        delivery.setLastResponseCode(result.statusCode());
+        delivery.setLastResponseSnippet(result.responseSnippet());
+        delivery.setLockedBy(null);
+        delivery.setLockedUntil(null);
+        delivery.setUpdatedAt(OffsetDateTime.now());
+
+        DeliveryAttempt attempt = DeliveryAttempt.builder()
+                .id(UUID.randomUUID().toString())
+                .deliveryId(delivery.getId())
+                .attemptNumber(newAttemptCount)
+                .responseCode(result.statusCode())
+                .latencyMs(result.latencyMs())
+                .error(result.error())
+                .createdAt(OffsetDateTime.now())
+                .build();
+        attemptRepository.save(attempt);
+
+        if (result.success()) {
+            delivery.setStatus("DELIVERED");
+            log.info("Delivery {} to endpoint {} succeeded with status {}", delivery.getId(), endpoint.getId(), result.statusCode());
+        } else {
+            delivery.setStatus("FAILED");
+            log.warn("Delivery {} to endpoint {} failed: code={}, error={}", delivery.getId(), endpoint.getId(), result.statusCode(), result.error());
+        }
+
+        deliveryRepository.save(delivery);
+    }
+}
