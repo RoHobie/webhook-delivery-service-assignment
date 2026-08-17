@@ -3,6 +3,7 @@ package com.webhook.delivery.repository;
 import com.webhook.delivery.domain.Delivery;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -22,6 +23,10 @@ public interface DeliveryRepository extends JpaRepository<Delivery, String>, Jpa
         FOR UPDATE SKIP LOCKED
         """, nativeQuery = true)
     List<Delivery> claimDueDeliveriesNative(@Param("now") OffsetDateTime now, @Param("limit") int limit);
+
+    @Modifying
+    @Query("UPDATE Delivery d SET d.lockedBy = null, d.lockedUntil = null, d.updatedAt = :now WHERE d.status = 'PENDING' AND d.lockedUntil IS NOT NULL AND d.lockedUntil < :now")
+    int releaseStaleLocks(@Param("now") OffsetDateTime now);
 
     List<Delivery> findAllByTenantIdAndEventId(String tenantId, String eventId);
 

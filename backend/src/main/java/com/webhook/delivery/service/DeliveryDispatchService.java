@@ -29,6 +29,7 @@ public class DeliveryDispatchService {
     private final SignatureService signatureService;
     private final OutboundHttpClient outboundHttpClient;
     private final BackoffCalculator backoffCalculator;
+    private final EndpointCircuitBreakerService circuitBreakerService;
 
     public DeliveryDispatchService(
             WebhookEventRepository eventRepository,
@@ -37,7 +38,8 @@ public class DeliveryDispatchService {
             DeliveryAttemptRepository attemptRepository,
             SignatureService signatureService,
             OutboundHttpClient outboundHttpClient,
-            BackoffCalculator backoffCalculator) {
+            BackoffCalculator backoffCalculator,
+            EndpointCircuitBreakerService circuitBreakerService) {
         this.eventRepository = eventRepository;
         this.endpointRepository = endpointRepository;
         this.deliveryRepository = deliveryRepository;
@@ -45,6 +47,7 @@ public class DeliveryDispatchService {
         this.signatureService = signatureService;
         this.outboundHttpClient = outboundHttpClient;
         this.backoffCalculator = backoffCalculator;
+        this.circuitBreakerService = circuitBreakerService;
     }
 
     @Transactional
@@ -60,6 +63,17 @@ public class DeliveryDispatchService {
         if (event == null || endpoint == null || "DISABLED".equalsIgnoreCase(endpoint.getStatus())) {
             log.warn("Delivery {} aborted: event or endpoint missing/disabled", deliveryId);
             delivery.setStatus("DEAD_LETTERED");
+            delivery.setLockedBy(null);
+            delivery.setLockedUntil(null);
+            delivery.setUpdatedAt(OffsetDateTime.now());
+            deliveryRepository.save(delivery);
+            return;
+        }
+
+        // Circuit breaker check
+        if (!circuitBreakerService.allowRequest(endpoint.getId())) {
+            log.warn("Delivery {} deferred because endpoint {} circuit breaker is OPEN", deliveryId, endpoint.getId());
+            delivery.setNextAttemptAt(OffsetDateTime.now().plusSeconds(60));
             delivery.setLockedBy(null);
             delivery.setLockedUntil(null);
             delivery.setUpdatedAt(OffsetDateTime.now());
@@ -101,8 +115,10 @@ public class DeliveryDispatchService {
 
         if (result.success()) {
             delivery.setStatus("DELIVERED");
+            circuitBreakerService.recordSuccess(endpoint.getId());
             log.info("Delivery {} to endpoint {} succeeded with status {}", delivery.getId(), endpoint.getId(), result.statusCode());
         } else {
+            circuitBreakerService.recordFailure(endpoint.getId());
             if (newAttemptCount >= backoffCalculator.getMaxAttempts()) {
                 delivery.setStatus("DEAD_LETTERED");
                 log.warn("Delivery {} to endpoint {} reached max attempts ({}) and was DEAD_LETTERED. Code: {}",
