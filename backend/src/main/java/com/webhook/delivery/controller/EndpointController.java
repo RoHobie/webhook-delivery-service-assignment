@@ -2,6 +2,7 @@ package com.webhook.delivery.controller;
 
 import com.webhook.delivery.dto.CreateEndpointRequest;
 import com.webhook.delivery.dto.EndpointResponse;
+import com.webhook.delivery.dto.EndpointTestResultResponse;
 import com.webhook.delivery.security.TenantContext;
 import com.webhook.delivery.service.EndpointService;
 
@@ -54,5 +55,12 @@ public class EndpointController {
         String tenantId = TenantContext.getTenantId();
         EndpointResponse response = endpointService.disableEndpoint(tenantId, id);
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/{id}/test")
+    public ResponseEntity<EndpointTestResultResponse> testEndpoint(@PathVariable("id") String id) {
+        String tenantId = TenantContext.getTenantId();
+        EndpointTestResultResponse result = endpointService.testEndpoint(tenantId, id);
+        return ResponseEntity.ok(result);
     }
 }

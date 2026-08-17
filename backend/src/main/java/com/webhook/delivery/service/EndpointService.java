@@ -4,6 +4,7 @@ import com.webhook.delivery.domain.Endpoint;
 import com.webhook.delivery.domain.Tenant;
 import com.webhook.delivery.dto.CreateEndpointRequest;
 import com.webhook.delivery.dto.EndpointResponse;
+import com.webhook.delivery.dto.EndpointTestResultResponse;
 import com.webhook.delivery.repository.EndpointRepository;
 import com.webhook.delivery.repository.TenantRepository;
 
@@ -24,14 +25,20 @@ public class EndpointService {
     private final EndpointRepository endpointRepository;
     private final TenantRepository tenantRepository;
     private final UrlValidationService urlValidationService;
+    private final SignatureService signatureService;
+    private final OutboundHttpClient outboundHttpClient;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public EndpointService(EndpointRepository endpointRepository,
                            TenantRepository tenantRepository,
-                           UrlValidationService urlValidationService) {
+                           UrlValidationService urlValidationService,
+                           SignatureService signatureService,
+                           OutboundHttpClient outboundHttpClient) {
         this.endpointRepository = endpointRepository;
         this.tenantRepository = tenantRepository;
         this.urlValidationService = urlValidationService;
+        this.signatureService = signatureService;
+        this.outboundHttpClient = outboundHttpClient;
     }
 
     @Transactional
@@ -79,6 +86,37 @@ public class EndpointService {
         ep.setUpdatedAt(OffsetDateTime.now());
         Endpoint updated = endpointRepository.save(ep);
         return mapToResponse(updated, false);
+    }
+
+    @Transactional(readOnly = true)
+    public EndpointTestResultResponse testEndpoint(String tenantId, String id) {
+        Endpoint ep = endpointRepository.findByTenantIdAndId(tenantId, id)
+                .orElseThrow(() -> new ResourceNotFoundException("Endpoint not found with id: " + id));
+
+        if ("DISABLED".equalsIgnoreCase(ep.getStatus())) {
+            throw new IllegalArgumentException("Endpoint is disabled");
+        }
+
+        String testPayload = "{\"event\":\"ping\",\"timestamp\":\"" + OffsetDateTime.now() + "\",\"message\":\"Webhook delivery system ping test\"}";
+        SignatureService.SignedHeaders signedHeaders = signatureService.generateSignature(ep.getSecret(), testPayload);
+
+        OutboundHttpClient.HttpResponseResult result = outboundHttpClient.sendWebhook(
+                ep.getUrl(),
+                testPayload,
+                "ping",
+                "ping-" + UUID.randomUUID(),
+                signedHeaders
+        );
+
+        return EndpointTestResultResponse.builder()
+                .endpointId(ep.getId())
+                .success(result.success())
+                .statusCode(result.statusCode())
+                .latencyMs(result.latencyMs())
+                .responseSnippet(result.responseSnippet())
+                .error(result.error())
+                .testedAt(OffsetDateTime.now())
+                .build();
     }
 
     private void ensureTenantExists(String tenantId) {
