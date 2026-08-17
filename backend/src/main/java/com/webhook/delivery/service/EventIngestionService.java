@@ -28,15 +28,18 @@ public class EventIngestionService {
     private final EndpointRepository endpointRepository;
     private final DeliveryRepository deliveryRepository;
     private final ObjectMapper objectMapper;
+    private final MetricsService metricsService;
 
     public EventIngestionService(WebhookEventRepository webhookEventRepository,
                                  EndpointRepository endpointRepository,
                                  DeliveryRepository deliveryRepository,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 MetricsService metricsService) {
         this.webhookEventRepository = webhookEventRepository;
         this.endpointRepository = endpointRepository;
         this.deliveryRepository = deliveryRepository;
         this.objectMapper = objectMapper;
+        this.metricsService = metricsService;
     }
 
     @Transactional
@@ -44,6 +47,7 @@ public class EventIngestionService {
         // Pre-check for duplicate external eventId under the same tenant
         Optional<WebhookEvent> existingOpt = webhookEventRepository.findByTenantIdAndEventIdExternal(tenantId, request.getEventId());
         if (existingOpt.isPresent()) {
+            metricsService.recordEventDuplicate(tenantId);
             WebhookEvent existing = existingOpt.get();
             long count = deliveryRepository.countByTenantIdAndEventId(tenantId, existing.getId());
             return IngestEventResponse.builder()
@@ -75,7 +79,7 @@ public class EventIngestionService {
         try {
             savedEvent = webhookEventRepository.save(eventToSave);
         } catch (DataIntegrityViolationException ex) {
-            // Concurrent duplicate submission race condition
+            metricsService.recordEventDuplicate(tenantId);
             WebhookEvent existing = webhookEventRepository.findByTenantIdAndEventIdExternal(tenantId, request.getEventId())
                     .orElseThrow(() -> ex);
             long count = deliveryRepository.countByTenantIdAndEventId(tenantId, existing.getId());
@@ -87,6 +91,8 @@ public class EventIngestionService {
                     .createdAt(existing.getCreatedAt())
                     .build();
         }
+
+        metricsService.recordEventIngested(tenantId, request.getType());
 
         // Fan out to active endpoints subscribing to this event type
         List<Endpoint> activeEndpoints = endpointRepository.findAllByTenantIdAndStatus(tenantId, "ACTIVE");

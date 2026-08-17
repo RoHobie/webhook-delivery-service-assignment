@@ -30,6 +30,7 @@ public class DeliveryDispatchService {
     private final OutboundHttpClient outboundHttpClient;
     private final BackoffCalculator backoffCalculator;
     private final EndpointCircuitBreakerService circuitBreakerService;
+    private final MetricsService metricsService;
 
     public DeliveryDispatchService(
             WebhookEventRepository eventRepository,
@@ -39,7 +40,8 @@ public class DeliveryDispatchService {
             SignatureService signatureService,
             OutboundHttpClient outboundHttpClient,
             BackoffCalculator backoffCalculator,
-            EndpointCircuitBreakerService circuitBreakerService) {
+            EndpointCircuitBreakerService circuitBreakerService,
+            MetricsService metricsService) {
         this.eventRepository = eventRepository;
         this.endpointRepository = endpointRepository;
         this.deliveryRepository = deliveryRepository;
@@ -48,6 +50,7 @@ public class DeliveryDispatchService {
         this.outboundHttpClient = outboundHttpClient;
         this.backoffCalculator = backoffCalculator;
         this.circuitBreakerService = circuitBreakerService;
+        this.metricsService = metricsService;
     }
 
     @Transactional
@@ -67,6 +70,7 @@ public class DeliveryDispatchService {
             delivery.setLockedUntil(null);
             delivery.setUpdatedAt(OffsetDateTime.now());
             deliveryRepository.save(delivery);
+            metricsService.recordDeliveryDispatched(delivery.getTenantId(), "DEAD_LETTERED");
             return;
         }
 
@@ -113,6 +117,8 @@ public class DeliveryDispatchService {
                 .build();
         attemptRepository.save(attempt);
 
+        metricsService.recordDeliveryLatency(delivery.getTenantId(), result.statusCode() != null ? result.statusCode() : 0, result.latencyMs());
+
         if (result.success()) {
             delivery.setStatus("DELIVERED");
             circuitBreakerService.recordSuccess(endpoint.getId());
@@ -133,5 +139,6 @@ public class DeliveryDispatchService {
         }
 
         deliveryRepository.save(delivery);
+        metricsService.recordDeliveryDispatched(delivery.getTenantId(), delivery.getStatus());
     }
 }
