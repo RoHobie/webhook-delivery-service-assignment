@@ -1,5 +1,6 @@
-package com.webhook.delivery.service;
+package com.webhook.delivery;
 
+import com.webhook.delivery.service.SignatureService;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
