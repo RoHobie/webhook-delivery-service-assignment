@@ -28,6 +28,7 @@ public class DeliveryDispatchService {
     private final DeliveryAttemptRepository attemptRepository;
     private final SignatureService signatureService;
     private final OutboundHttpClient outboundHttpClient;
+    private final BackoffCalculator backoffCalculator;
 
     public DeliveryDispatchService(
             WebhookEventRepository eventRepository,
@@ -35,13 +36,15 @@ public class DeliveryDispatchService {
             DeliveryRepository deliveryRepository,
             DeliveryAttemptRepository attemptRepository,
             SignatureService signatureService,
-            OutboundHttpClient outboundHttpClient) {
+            OutboundHttpClient outboundHttpClient,
+            BackoffCalculator backoffCalculator) {
         this.eventRepository = eventRepository;
         this.endpointRepository = endpointRepository;
         this.deliveryRepository = deliveryRepository;
         this.attemptRepository = attemptRepository;
         this.signatureService = signatureService;
         this.outboundHttpClient = outboundHttpClient;
+        this.backoffCalculator = backoffCalculator;
     }
 
     @Transactional
@@ -100,8 +103,17 @@ public class DeliveryDispatchService {
             delivery.setStatus("DELIVERED");
             log.info("Delivery {} to endpoint {} succeeded with status {}", delivery.getId(), endpoint.getId(), result.statusCode());
         } else {
-            delivery.setStatus("FAILED");
-            log.warn("Delivery {} to endpoint {} failed: code={}, error={}", delivery.getId(), endpoint.getId(), result.statusCode(), result.error());
+            if (newAttemptCount >= backoffCalculator.getMaxAttempts()) {
+                delivery.setStatus("DEAD_LETTERED");
+                log.warn("Delivery {} to endpoint {} reached max attempts ({}) and was DEAD_LETTERED. Code: {}",
+                        delivery.getId(), endpoint.getId(), newAttemptCount, result.statusCode());
+            } else {
+                long delaySeconds = backoffCalculator.calculateNextDelaySeconds(newAttemptCount);
+                delivery.setStatus("PENDING");
+                delivery.setNextAttemptAt(OffsetDateTime.now().plusSeconds(delaySeconds));
+                log.info("Delivery {} to endpoint {} failed attempt {}. Next attempt scheduled in {}s",
+                        delivery.getId(), endpoint.getId(), newAttemptCount, delaySeconds);
+            }
         }
 
         deliveryRepository.save(delivery);
