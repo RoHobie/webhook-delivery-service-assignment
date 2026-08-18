@@ -39,59 +39,49 @@ For detailed technical design documents, API specifications, and architectural r
 
 ---
 
-### Step 1: Clone & Navigate
+### One-Command Start (Recommended)
 
-```bash
-git clone https://github.com/RoHobie/webhook-delivery-service-assignment.git
-cd webhook-delivery-service-assignment
-```
+Start PostgreSQL 16, the Spring Boot 4.x backend, and the Control Dashboard together:
 
----
-
-### Step 2: Run with Docker Compose (Recommended)
-
-Start PostgreSQL 16 and the Spring Boot 4.x backend service together using Docker Compose.
 ```bash
 cd backend
 docker compose up --build
 ```
 
-#### Services & Container Ports Configuration
-The `docker-compose.yml` file configures two services:
-- **`postgres`** (`webhook_postgres`): PostgreSQL 16 Alpine
-  - **Database**: `webhook_db` | **User**: `webhook_user` | **Password**: `webhook_pass`
-  - **Internal Port**: `5432` | **Host Port Mapping**: `5435:5432` (accessible on host at `localhost:5435`)
-- **`app`** (`webhook_app`): Spring Boot 4.x Application (built via multi-stage `Dockerfile`)
-  - **Internal & Host Port**: `8080:8080`
-  - **Environment**: `DB_URL=jdbc:postgresql://postgres:5432/webhook_db`, `DB_USER=webhook_user`, `DB_PASSWORD=webhook_pass`, `ALLOW_INTERNAL_URLS=true`
+That's it! The application is fully up and running.
 
 #### Service Access
-- **Control Dashboard**: Access **`http://localhost:8080`** in your browser.
+- **Control Dashboard**: **`http://localhost:8080`**
 - **REST API Base**: `http://localhost:8080/api/v1`
 - **Health Check Endpoint**: `curl http://localhost:8080/actuator/health`
 
+#### Services & Container Ports Configuration
+The `docker-compose.yml` file configures:
+- **`postgres`** (`webhook_postgres`): PostgreSQL 16 Alpine
+  - **Database**: `webhook_db` | **User**: `webhook_user` | **Password**: `webhook_pass`
+  - **Host Port Mapping**: `5435:5432`
+- **`app`** (`webhook_app`): Spring Boot 4.x Application
+  - **Internal & Host Port**: `8080:8080`
+
 To stop the containers:
 ```bash
-# From repository root:
-docker compose -f backend/docker-compose.yml down
-
-# Or inside backend/:
 docker compose down
 ```
 
 ---
 
-### Step 3: Standalone Docker Build & Execution
+### Alternative Launch Modes
 
-To build and run the backend Docker container individually:
+If you prefer not to use Docker Compose, you can run the service using one of the alternative methods below:
 
-1. **Build the Docker Image** (from the `backend/` directory):
+#### Option 1: Standalone Docker Container
+
+1. **Build Docker Image** (from `backend/` directory):
 ```bash
-cd backend
 docker build -t webhook-delivery-service .
 ```
 
-2. **Run the Container** (connecting to a running PostgreSQL instance):
+2. **Run Container** (connecting to a running PostgreSQL instance):
 ```bash
 docker run -p 8080:8080 \
   -e DB_URL=jdbc:postgresql://host.docker.internal:5432/webhook_db \
@@ -101,42 +91,22 @@ docker run -p 8080:8080 \
   webhook-delivery-service
 ```
 
----
+#### Option 2: Local Development Mode (Maven)
 
-### Step 4: Run Locally for Development (Maven + Local DB)
+To run the Spring Boot application locally with Maven while running PostgreSQL in Docker:
 
-To run the Spring Boot application using Maven while running PostgreSQL in Docker:
-
-#### Option A: Connect to Docker Compose PostgreSQL
-1. Start the PostgreSQL service only from the `backend/` directory:
+1. **Start PostgreSQL only**:
 ```bash
-cd backend
 docker compose up postgres -d
 ```
-2. Launch the Spring Boot application connecting to PostgreSQL on host port `5435`:
+2. **Launch Application**:
 ```bash
 DB_URL=jdbc:postgresql://localhost:5435/webhook_db DB_USER=webhook_user DB_PASSWORD=webhook_pass ./mvnw spring-boot:run
 ```
 
-#### Option B: Connect to Standalone PostgreSQL Container (Default Port 5432)
-1. Start a standalone PostgreSQL container with default credentials:
-```bash
-docker run -d --name postgres-webhook \
-  -e POSTGRES_DB=webhook_db \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -p 5432:5432 postgres:16-alpine
-```
-
-2. Launch the application (uses default `application.yml` database settings):
-```bash
-cd backend
-./mvnw spring-boot:run
-```
-
 ---
 
-### Step 5: Run the Integration Test Suite
+### Running Integration Tests
 
 Execute the automated test suite (uses **Testcontainers** for PostgreSQL integration and **WireMock** for outbound HTTP stubs). Docker daemon must be running.
 
