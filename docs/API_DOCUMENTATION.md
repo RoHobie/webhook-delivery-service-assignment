@@ -48,7 +48,7 @@ Registers a new target URL for webhook payload deliveries.
   "id": "end_9f81a2b3",
   "tenantId": "default-tenant",
   "url": "https://api.example.com/webhooks/receiver",
-  "secret": "whsec_7f9a2b4c6e8d1f3a5b7c9e0d2f4a6b8c0e2f4a6b8c0e2f4a6b8c0e2f4a6b8c0e",
+  "secret": "whsec_YOUR_SECRET_KEY",
   "subscribedEventTypes": [
     "order.created",
     "user.signup",

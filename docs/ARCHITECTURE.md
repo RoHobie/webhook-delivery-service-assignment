@@ -1,12 +1,12 @@
-# System Architecture & Lifecycle Flow
+# System Architecture
 
-This document details the architectural design, component interactions, concurrency model, resilience subsystems, security mechanisms, and data access patterns of the **Multi-Tenant Webhook Delivery Service**.
+This document details the architectural design, core components, concurrency model, security, and database design of the **Multi-Tenant Webhook Delivery Service**.
 
 ---
 
 ## 1. High-Level Architecture Overview
 
-The system is designed around an **asynchronous, lock-free fan-out pipeline** with **database-backed state persistence**. 
+The system uses an asynchronous, lock-free pipeline backed by PostgreSQL state persistence.
 
 ```
                                   +------------------------------------+
@@ -63,85 +63,20 @@ The system is designed around an **asynchronous, lock-free fan-out pipeline** wi
 
 ---
 
-## 2. End-to-End Event Lifecycle Flow
+## 2. Subsystem Breakdown
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Producer as Event Producer
-    participant Controller as EventController
-    participant Interceptor as TenantInterceptor
-    participant RateLimiter as TenantRateLimiter
-    participant Ingestion as EventIngestionService
-    participant DB as PostgreSQL DB
-    participant Worker as DeliveryDispatchService
-    participant CircuitBreaker as EndpointCircuitBreaker
-    participant Target as Consumer Endpoint
+### 2.1 Tenant Isolation & Security Interceptor
+- Inbound API requests are validated by `TenantInterceptor` checking the mandatory `X-Tenant-Id` header against registered tenants.
+- Valid tenant IDs are stored in a `ThreadLocal` context (`TenantContext`), ensuring operations remain scoped to the requesting tenant.
+- Unauthorized attempts to access foreign tenant resources return `404 Not Found` or `401 Unauthorized`.
 
-    Producer->>Controller: POST /api/v1/events (X-Tenant-Id, Payload, EventId)
-    Controller->>Interceptor: Intercept Request
-    Interceptor->>Interceptor: Validate X-Tenant-Id header & set TenantContext ThreadLocal
-    Controller->>RateLimiter: tryAcquire(tenantId)
-    alt Rate Limit Exceeded
-        RateLimiter-->>Producer: HTTP 429 Too Many Requests (Retry-After: 1)
-    else Token Available
-        Controller->>Ingestion: ingestEvent(tenantId, request)
-        Ingestion->>DB: Query event by (tenantId, eventIdExternal)
-        alt Duplicate Event
-            Ingestion-->>Producer: HTTP 202 Accepted (Existing Event Details, No Fan-out)
-        else New Event
-            Ingestion->>DB: Save Event entity
-            Ingestion->>DB: Find active endpoints matching subscribedEventTypes
-            Ingestion->>DB: Bulk insert Delivery records (status=PENDING)
-            Ingestion-->>Producer: HTTP 202 Accepted (eventId, status=ACCEPTED, deliveryCount)
-        end
-    end
+### 2.2 Ingestion & Deduplication Pipeline
+- Event producers provide an `eventId` (`event_id_external`).
+- A composite unique constraint on `(tenant_id, event_id_external)` in PostgreSQL prevents duplicate inserts.
+- If a duplicate event arrives, `EventIngestionService` returns `202 Accepted` with the existing status without duplicating delivery jobs.
 
-    Note over Worker, DB: Async Background Dispatch Loop (Fixed Delay Execution)
-    Worker->>DB: SELECT * FROM deliveries WHERE status='PENDING' AND next_attempt_at <= NOW() FOR UPDATE SKIP LOCKED
-    DB-->>Worker: Claimed Deliveries (locked_by, locked_until updated)
-    
-    loop For each claimed delivery
-        Worker->>CircuitBreaker: isCallPermitted(endpointId)
-        alt Circuit OPEN
-            Worker->>DB: Reschedule delivery (increment attempt, set next_attempt_at in future)
-        else Circuit CLOSED / HALF_OPEN
-            Worker->>Target: POST Signed Payload (Virtual Thread)
-            alt Response 2xx Success
-                Target-->>Worker: HTTP 200 OK
-                Worker->>CircuitBreaker: recordSuccess(endpointId)
-                Worker->>DB: Update Delivery status=DELIVERED, insert DeliveryAttempt log
-            else Response Failure / Timeout / 5xx
-                Target-->>Worker: HTTP 500 / Timeout Error
-                Worker->>CircuitBreaker: recordFailure(endpointId)
-                alt Attempt Count < Max Attempts (8)
-                    Worker->>DB: Reschedule delivery (status=PENDING, next_attempt_at = NOW() + Backoff)
-                else Max Attempts Reached
-                    Worker->>DB: Update Delivery status=DEAD_LETTERED
-                end
-                Worker->>DB: Insert DeliveryAttempt log (httpCode, latency, snippet truncated to 500 chars)
-            end
-        end
-    end
-```
-
----
-
-## 3. Subsystem Breakdown
-
-### 3.1 Tenant Isolation & Security Interceptor
-- Every inbound REST API request is intercepted by `TenantInterceptor`.
-- The interceptor verifies the mandatory `X-Tenant-Id` header against the DB table `tenants`.
-- If valid, the tenant ID is stored in a `ThreadLocal` context (`TenantContext`), guaranteeing that downstream controllers and repositories execute strictly within that tenant's boundaries.
-- Cross-tenant requests (e.g. attempting to read another tenant's delivery log or endpoint secret via path parameter manipulation) result in an immediate `404 Not Found` or `401 Unauthorized`.
-
-### 3.2 Ingestion & Deduplication Pipeline
-- **Producer Idempotency**: Producers supply an `eventId` (`event_id_external`).
-- A compound unique constraint on `(tenant_id, event_id_external)` in PostgreSQL prevents duplicate inserts under concurrent requests.
-- When a duplicate is received, `EventIngestionService` catches the constraint violation / query match and returns `202 Accepted` with the existing status without triggering a duplicate fan-out delivery.
-
-### 3.3 DB-Level Due-Work Selection & Concurrency Engine
-- **No In-Memory Filtering**: Unlike systems that fetch all rows into Java memory and filter with streams, this service delegates job claiming directly to PostgreSQL using:
+### 2.3 DB-Level Claim & Concurrency Engine
+- Job claiming is performed directly in PostgreSQL using:
   ```sql
   SELECT * FROM deliveries
   WHERE status = 'PENDING'
@@ -151,41 +86,39 @@ sequenceDiagram
   LIMIT :batchSize
   FOR UPDATE SKIP LOCKED;
   ```
-- **Lock-Free Multithreading**: Multiple worker nodes or concurrent execution threads run this query simultaneously. `SKIP LOCKED` ensures that rows claimed by Worker A are silently skipped by Worker B without blocking or lock contention.
-- **Java 21 Virtual Threads**: Outbound HTTP requests are dispatched using `Executors.newVirtualThreadPerTaskExecutor()`. Millions of virtual threads can be spawned at minimal CPU and memory overhead, isolating slow receiver endpoints.
+- Concurrent worker threads execute this query safely. `FOR UPDATE SKIP LOCKED` ensures workers never claim the same row or block each other.
+- Outbound HTTP deliveries are dispatched asynchronously using Java 21 Virtual Threads (`Executors.newVirtualThreadPerTaskExecutor()`).
 
-### 3.4 Security & SSRF Protection
-- **HMAC-SHA256 Payload Signing**: Every endpoint is assigned a cryptographically secure 64-character hex secret key upon registration. Outbound webhook payloads are signed using HMAC-SHA256:
+### 2.4 Security & SSRF Protection
+- **HMAC-SHA256 Payload Signing**: Webhook payloads are signed using a secret hex key assigned to each endpoint:
   ```
   X-Webhook-Signature: t=1771182300,v1=a8f9c2...
   X-Webhook-Timestamp: 1771182300
   X-Webhook-Event-Type: order.created
   X-Webhook-Delivery-Id: del_881920
   ```
-- **SSRF (Server-Side Request Forgery) Guard**: Endpoint URLs are validated upon registration and before dispatch. Requests to loopback addresses (`127.0.0.1`, `localhost`), RFC 1918 private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16`), and multicast addresses are rejected automatically unless explicitly permitted by configuration.
+- **SSRF Guard**: Endpoint URLs are checked during registration and dispatch. Requests targeting loopback (`127.0.0.1`, `localhost`), private subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local (`169.254.0.0/16`), or multicast IPs are blocked.
 
-### 3.5 Resilience & Self-Healing Architecture
-1. **Endpoint Circuit Breaker**: Managed by `EndpointCircuitBreakerService`.
-   - Tracks consecutive delivery failures per endpoint.
-   - Triggers an `OPEN` state after 5 consecutive failures.
-   - Cooldown window: 60 seconds before transitioning to `HALF_OPEN` to test recovery.
-   - Protects failing receiver servers from being bombarded during outages.
+### 2.5 Resilience & Self-Healing Architecture
+1. **Endpoint Circuit Breaker**:
+   - `EndpointCircuitBreakerService` monitors delivery failures.
+   - Trips to `OPEN` after 5 consecutive failures per endpoint, pausing attempts for a 60-second cooldown window before testing recovery in `HALF_OPEN`.
 2. **Exponential Backoff with Equal Jitter**:
-   - Backoff delay formula:
-     $$\text{delay} = \text{base\_delay} \times 2^{(\text{attempt} - 1)}$$
+   - Standard delay formula:
+     `delay = base_delay * 2^(attempt - 1)`
    - With 50% Equal Jitter:
-     $$\text{actual\_delay} = \frac{\text{delay}}{2} + \text{random}(0, \frac{\text{delay}}{2})$$
-   - Prevents "thundering herd" problems when receiver servers recover.
+     `actual_delay = (delay / 2) + random(0, delay / 2)`
+   - Prevents thundering herd retries when recovering target servers.
 3. **Dead-Letter Queue (DLQ) & Redrive**:
-   - Deliveries that fail max attempts (default: 8) transition to `DEAD_LETTERED`.
-   - Tenants can trigger manual redrive via `POST /api/v1/deliveries/{id}/redrive`, resetting `status=PENDING`, `attempt_count=0`, and `next_attempt_at=NOW()`.
-4. **Zero-Loss Crash Recovery**:
-   - When a worker claims a delivery, it sets `locked_until = NOW() + 30 seconds`.
-   - If a worker node dies unexpectedly mid-delivery, `CrashRecoveryService` periodically runs a background task clearing locks where `locked_until < NOW()`, making the delivery immediately claimable by active workers.
+   - Deliveries reaching max attempts (default: 8) transition to `DEAD_LETTERED`.
+   - Tenants can manually trigger a redrive via `POST /api/v1/deliveries/{id}/redrive`, resetting status to `PENDING` and attempt count to `0`.
+4. **Crash Recovery**:
+   - When a delivery is claimed, `locked_until` is set to 30 seconds in the future.
+   - If a worker crashes mid-attempt, `CrashRecoveryService` clears expired locks (`locked_until < NOW()`), making items available for re-claiming.
 
 ---
 
-## 4. Database Schema & Indexing Strategy
+## 3. Database Schema & Indexing Strategy
 
 ```
 +------------------+         +--------------------------+
@@ -228,10 +161,10 @@ sequenceDiagram
                              +--------------------------+
 ```
 
-### Critical Partial Index for Sub-Millisecond Due-Work Claiming
+### Partial Index for Pending Delivery Claiming
 ```sql
 CREATE INDEX idx_deliveries_pending_claim
 ON deliveries (status, next_attempt_at)
 WHERE status = 'PENDING';
 ```
-This partial index ensures PostgreSQL can locate pending due deliveries instantly without scanning millions of historical `DELIVERED` or `DEAD_LETTERED` records.
+This partial index enables PostgreSQL to locate pending deliveries instantly without scanning completed or dead-lettered records.

@@ -10,7 +10,7 @@ This service enables multi-tenant applications to register webhook endpoints, in
 
 For detailed technical design documents, API specifications, and architectural rationale, refer to the documentation in [`docs/`](docs/):
 
-- **[Architecture Flow & System Lifecycle](docs/ARCHITECTURE.md)**: Covers the ingestion pipeline, fan-out matching, database-level claim concurrency engine (`FOR UPDATE SKIP LOCKED`), virtual thread dispatching, and crash recovery.
+- **[System Architecture](docs/ARCHITECTURE.md)**: Covers the ingestion pipeline, fan-out matching, database-level claim concurrency engine (`FOR UPDATE SKIP LOCKED`), virtual thread dispatching, and crash recovery.
 - **[REST API Reference & Webhook Verification Guide](docs/API_DOCUMENTATION.md)**: Contains complete API endpoint specifications, JSON request/response examples, and consumer signature verification code snippets in Java, Node.js, and Python.
 - **[Design Decisions & Rationale](docs/DESIGN_DECISIONS.md)**: Explains the architectural trade-offs, engineering choices, and alignment with non-functional requirements.
 
@@ -161,34 +161,16 @@ curl -X POST http://localhost:8080/api/v1/endpoints/{endpointId}/test \
 
 ## Known Limitations
 
-1. **In-Memory Rate Limiter & Circuit Breaker State**:
-   - `TenantRateLimiterService` and `EndpointCircuitBreakerService` maintain state in local memory.
-   - *Impact*: In a multi-node deployment, rate limits and circuit breaker trip thresholds apply per-instance rather than cluster-wide.
-   - *Mitigation*: Integrate Redis with Redisson or Bucket4j for cluster-wide token buckets and circuit states.
-
-2. **Database Polling vs Distributed Event Streaming**:
+1. **Database Polling vs Distributed Event Streaming**:
    - Deliveries are polled from PostgreSQL using `SELECT ... FOR UPDATE SKIP LOCKED`.
    - *Impact*: Suitable for tens of thousands of deliveries per minute. High event volumes may increase DB CPU utilization.
    - *Mitigation*: Introduce a message streaming engine (e.g. Apache Kafka or AWS SQS) for event dispatch while using PostgreSQL for audit logging and DLQ storage.
 
-3. **Database Column-Based Multi-Tenancy**:
-   - Tenants share a single PostgreSQL database with `tenant_id` columns enforcing logical isolation.
-   - *Impact*: Standard SaaS multi-tenancy model; enterprise tenants requiring physical data separation will need dedicated database schemas or instances.
-
-4. **Fixed Dispatch Polling Interval**:
+2. **Fixed Dispatch Polling Interval**:
    - The worker pool polls for pending deliveries at a fixed 1-second interval (`fixedDelay = 1000ms`).
-
----
-
-## Future Roadmap & Enhancements
-
-- **Distributed State with Redis**: Migrate in-memory rate limiting and circuit breaking to Redis for cluster-wide enforcement.
-- **Per-Tenant Custom Retry Policies**: Store per-tenant retry configurations (max attempt count, initial backoff delay, backoff multiplier) in the database.
-- **Payload Filtering & Transformations**: Allow tenants to define JSONPath expression filters and payload transformation templates per endpoint subscription.
-- **Mutual TLS (mTLS) Support**: Support client certificate authentication for outbound webhooks targeting high-security enterprise receivers.
-- **Real-Time Admin Dashboard**: Build a web UI for monitoring delivery performance, latency metrics, and managing DLQ redrives.
 
 ---
 
 ## License
 Apache License 2.0
+

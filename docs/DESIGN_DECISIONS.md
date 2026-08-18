@@ -1,12 +1,12 @@
-# Architectural Design Rationale & Candidate Brief Alignment
+# Architectural Design & Rationale
 
-This document details the **Why** (engineering rationale) and **How** (technical implementation) behind every architectural decision made in this repository to satisfy the requirements, evaluation criteria, and non-functional requirements (NFRs) specified in `webhook-delivery-assignment-candidate-brief.md`.
+This document details the engineering rationale (Why) and technical implementation (How) behind key architectural decisions in this repository.
 
 ---
 
 ## 1. At-Least-Once Delivery Guarantee vs. "Usually"
 
-### The Challenge (§2.1 & §6 FR-3)
+### The Challenge
 Webhooks must never be dropped silently during process restarts, server crashes, or network partitions. Memory-queued jobs lost on app restart represent a critical failure in delivery infrastructure.
 
 ### Why This Design Was Chosen
@@ -21,7 +21,7 @@ We chose a **Database-Backed Persistent State Machine** over in-memory queues (e
 
 ## 2. DB-Level Due-Work Selection & Row Locking (`FOR UPDATE SKIP LOCKED`)
 
-### The Challenge (§2.3 & §6 FR-3)
+### The Challenge
 A common anti-pattern is fetching all pending delivery rows into Java memory (`SELECT * FROM deliveries`) and filtering due items via Java `.stream()`. This causes severe OOM crashes at scale, table scan lock contention, and duplicate execution across multiple worker nodes.
 
 ### Why This Design Was Chosen
@@ -38,7 +38,7 @@ Delegating claim selection directly to PostgreSQL via `FOR UPDATE SKIP LOCKED` g
   LIMIT 50
   FOR UPDATE SKIP LOCKED;
   ```
-- **Partial Indexing Support (NFR-2)**:
+- **Partial Indexing Support**:
   ```sql
   CREATE INDEX idx_deliveries_pending_claim
   ON deliveries (status, next_attempt_at)
@@ -50,7 +50,7 @@ Delegating claim selection directly to PostgreSQL via `FOR UPDATE SKIP LOCKED` g
 
 ## 3. Strict Multi-Tenant Isolation
 
-### The Challenge (§2.2 & §6 FR-5)
+### The Challenge
 In a multi-tenant platform, data leakage between tenants is an unacceptable vulnerability. Tenant A must never access Tenant B's endpoints, delivery logs, or signing secrets—even if Tenant A attempts URL tampering with Tenant B's UUIDs.
 
 ### Why This Design Was Chosen
@@ -65,7 +65,7 @@ We implemented **Layered Defensive Isolation**: HTTP header authentication at th
 
 ## 4. Producer Event Idempotency
 
-### The Challenge (§6 FR-2 & §9)
+### The Challenge
 Upstream producer systems frequently retry event ingestion due to network timeouts. Re-ingesting the same producer `eventId` must not generate duplicate outbound webhooks.
 
 ### Why This Design Was Chosen
@@ -79,7 +79,7 @@ Relying on application-level checks-then-inserts creates race conditions under h
 
 ## 5. High-Throughput Concurrency & Virtual Threads
 
-### The Challenge (§6 FR-7 & NFR-3)
+### The Challenge
 Traditional OS thread pools (e.g. 200 Tomcat threads) exhaust quickly when outbound webhook targets are slow or hanging.
 
 ### Why This Design Was Chosen
@@ -93,7 +93,7 @@ Java 21 **Virtual Threads** (`Executors.newVirtualThreadPerTaskExecutor()`) allo
 
 ## 6. Security, HMAC-SHA256 Signing & SSRF Protection
 
-### The Challenge (§5 & §6 FR-1)
+### The Challenge
 Receivers need cryptographic proof that webhooks originate from our platform. Additionally, malicious users might attempt Server-Side Request Forgery (SSRF) by registering internal IPs (`http://127.0.0.1/admin`).
 
 ### Why This Design Was Chosen
@@ -108,7 +108,7 @@ Receivers need cryptographic proof that webhooks originate from our platform. Ad
 
 ## 7. Endpoint Circuit Breaker & Exponential Backoff + Jitter
 
-### The Challenge (§6 FR-3, FR-7 & NFR-6)
+### The Challenge
 - Repeatedly calling dead endpoints wastes system resources and risks crashing receiver servers as soon as they reboot.
 - Retrying on fixed intervals causes "thundering herd" traffic spikes.
 
@@ -119,19 +119,20 @@ Receivers need cryptographic proof that webhooks originate from our platform. Ad
 ### How It Is Implemented
 - **Circuit Breaker State Machine**: `EndpointCircuitBreakerService` tracks consecutive failures per endpoint. 5 consecutive failures trip state to `OPEN` for a 60-second cooldown window.
 - **Backoff Formula**:
-  $$\text{delay} = \text{base\_delay} \times 2^{(\text{attempt} - 1)}$$
-  $$\text{actual\_delay} = \frac{\text{delay}}{2} + \text{random}(0, \frac{\text{delay}}{2})$$
+  `delay = base_delay * 2^(attempt - 1)`
+  `actual_delay = (delay / 2) + random(0, delay / 2)`
   Verified by unit test suite (`BackoffCalculatorTest`).
 
 ---
 
-## 8. Summary of Alignment with Candidate Brief
+## 8. Design Summary & Verification
 
-| Brief Field of Concern | Applied Solution | Implementation Verification |
+| Feature / Requirement | Design Choice | Implementation Verification |
 |---|---|---|
-| **Runs from Clean Clone** (§3 Tier 1) | Spring Boot 4.x + Docker Compose + Flyway | Verified via `docker-compose up` |
-| **At-Least-Once Delivery** (§2.1) | Persistent `PENDING` state + lease recovery | `CircuitBreakerAndRecoveryIntegrationTest` |
-| **Tenant Isolation** (§2.2) | Header interceptor + DB tenant scoping | `EndpointIntegrationTest` |
-| **DB-Level Work Selection** (§2.3) | `FOR UPDATE SKIP LOCKED` + partial index | `ConcurrencyClaimTest` |
-| **Survives Reality** (§2.4) | Circuit breaker + SSRF guard + timeouts | `DeliveryRetryIntegrationTest` |
-| **Idempotent Ingestion** (§6 FR-2) | `(tenant_id, event_id_ext)` constraint | `EventIngestionIntegrationTest` |
+| **Setup & Deployment** | Spring Boot 4.x + Docker Compose + Flyway | Verified via `docker-compose up` |
+| **At-Least-Once Delivery** | Persistent `PENDING` state + lease recovery | `CircuitBreakerAndRecoveryIntegrationTest` |
+| **Tenant Isolation** | Header interceptor + DB tenant scoping | `EndpointIntegrationTest` |
+| **DB-Level Work Selection** | `FOR UPDATE SKIP LOCKED` + partial index | `ConcurrencyClaimTest` |
+| **Resilience & SSRF Guard** | Circuit breaker + SSRF guard + timeouts | `DeliveryRetryIntegrationTest` |
+| **Idempotent Ingestion** | `(tenant_id, event_id_ext)` constraint | `EventIngestionIntegrationTest` |
+
