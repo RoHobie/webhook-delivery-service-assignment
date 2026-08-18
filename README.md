@@ -34,39 +34,92 @@ For detailed technical design documents, API specifications, and architectural r
 
 ### Prerequisites
 - **Java 21** JDK (LTS)
-- **Docker** and **Docker Compose**
+- **Docker** and **Docker Compose** (V2 recommended)
 - **Git**
 
 ---
 
-### Step 1: Clone the Repository
+### Step 1: Clone & Navigate
 
 ```bash
 git clone https://github.com/RoHobie/webhook-delivery-service-assignment.git
-cd webhook-delivery-service-assignment/backend
+cd webhook-delivery-service-assignment
 ```
 
 ---
 
 ### Step 2: Run with Docker Compose (Recommended)
 
-Start PostgreSQL and the Spring Boot 4.x backend service:
-
+Start PostgreSQL 16 and the Spring Boot 4.x backend service together using Docker Compose.
 ```bash
+cd backend
 docker compose up --build
 ```
 
-- **Dashboard**: Access `http://localhost:8080` in your browser.
-- **API Base**: `http://localhost:8080/api/v1`
-- **Health Check**: `curl http://localhost:8080/actuator/health`
+#### Services & Container Ports Configuration
+The `docker-compose.yml` file configures two services:
+- **`postgres`** (`webhook_postgres`): PostgreSQL 16 Alpine
+  - **Database**: `webhook_db` | **User**: `webhook_user` | **Password**: `webhook_pass`
+  - **Internal Port**: `5432` | **Host Port Mapping**: `5435:5432` (accessible on host at `localhost:5435`)
+- **`app`** (`webhook_app`): Spring Boot 4.x Application (built via multi-stage `Dockerfile`)
+  - **Internal & Host Port**: `8080:8080`
+  - **Environment**: `DB_URL=jdbc:postgresql://postgres:5432/webhook_db`, `DB_USER=webhook_user`, `DB_PASSWORD=webhook_pass`, `ALLOW_INTERNAL_URLS=true`
+
+#### Service Access
+- **Control Dashboard**: Access **`http://localhost:8080`** in your browser.
+- **REST API Base**: `http://localhost:8080/api/v1`
+- **Health Check Endpoint**: `curl http://localhost:8080/actuator/health`
+
+To stop the containers:
+```bash
+# From repository root:
+docker compose -f backend/docker-compose.yml down
+
+# Or inside backend/:
+docker compose down
+```
 
 ---
 
-### Step 3: Run Locally for Development
+### Step 3: Standalone Docker Build & Execution
 
-To run PostgreSQL in Docker while executing the Spring Boot 4.x application via Maven:
+To build and run the backend Docker container individually:
 
-1. Start the PostgreSQL container:
+1. **Build the Docker Image** (from the `backend/` directory):
+```bash
+cd backend
+docker build -t webhook-delivery-service .
+```
+
+2. **Run the Container** (connecting to a running PostgreSQL instance):
+```bash
+docker run -p 8080:8080 \
+  -e DB_URL=jdbc:postgresql://host.docker.internal:5432/webhook_db \
+  -e DB_USER=webhook_user \
+  -e DB_PASSWORD=webhook_pass \
+  -e ALLOW_INTERNAL_URLS=true \
+  webhook-delivery-service
+```
+
+---
+
+### Step 4: Run Locally for Development (Maven + Local DB)
+
+To run the Spring Boot application using Maven while running PostgreSQL in Docker:
+
+#### Option A: Connect to Docker Compose PostgreSQL
+1. Start the PostgreSQL service only from the `backend/` directory:
+```bash
+cd backend
+docker compose up postgres -d
+```
+2. Launch the Spring Boot application connecting to PostgreSQL on host port `5435`:
+```bash
+DB_URL=jdbc:postgresql://localhost:5435/webhook_db DB_USER=webhook_user DB_PASSWORD=webhook_pass ./mvnw spring-boot:run
+```
+
+#### Option B: Connect to Standalone PostgreSQL Container (Default Port 5432)
+1. Start a standalone PostgreSQL container with default credentials:
 ```bash
 docker run -d --name postgres-webhook \
   -e POSTGRES_DB=webhook_db \
@@ -75,18 +128,20 @@ docker run -d --name postgres-webhook \
   -p 5432:5432 postgres:16-alpine
 ```
 
-2. Launch the application:
+2. Launch the application (uses default `application.yml` database settings):
 ```bash
+cd backend
 ./mvnw spring-boot:run
 ```
 
 ---
 
-### Step 4: Run the Integration Test Suite
+### Step 5: Run the Integration Test Suite
 
-Execute the automated test suite (uses Testcontainers for PostgreSQL integration and WireMock for outbound HTTP stubs):
+Execute the automated test suite (uses **Testcontainers** for PostgreSQL integration and **WireMock** for outbound HTTP stubs). Docker daemon must be running.
 
 ```bash
+cd backend
 ./mvnw test
 ```
 
