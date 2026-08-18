@@ -1,8 +1,21 @@
 # Multi-Tenant Webhook Delivery Service
 
-A reliable, production-ready, high-performance webhook delivery service built with **Java 21 Virtual Threads**, **Spring Boot 4.x** (`4.0.0-M1`), and **PostgreSQL 16**.
+A reliable, production-ready, high-performance webhook delivery service built with **Java 21 Virtual Threads**, **Spring Boot 4.x** (`4.0.0-M1`), and **PostgreSQL 16**, complete with an interactive web-based **Control Dashboard**.
 
 This service enables multi-tenant applications to register webhook endpoints, ingest events idempotently, and deliver payloads reliably. It supports automatic retries with exponential backoff and jitter, per-tenant rate limiting, HMAC-SHA256 signature signing, circuit breaking for unstable endpoints, and crash recovery.
+
+---
+
+## Interactive Control Dashboard
+
+The application includes a modern, dark-themed **Vanilla JS Single Page Application (SPA)** statically served directly by Spring Boot:
+
+- **Web Dashboard URL**: **`http://localhost:8080`**
+- **Features**:
+  - **Endpoints Management**: Register targets, view HMAC signing secrets, toggle endpoint status, and send synchronous ping self-tests.
+  - **Event Ingestion & Idempotency**: Publish event payloads, generate UUIDs, and test duplicate submission handling (`HTTP 202` without duplicate delivery creation).
+  - **Delivery Diagnostics & Audit Trail**: Real-time delivery logs, status filters, 3s auto-polling toggle, expandable retry attempt logs, and dead-letter manual redrive.
+  - **Tenant Isolation Security Suite**: Interactive cross-tenant security runner verifying that Tenant B cannot inspect or redrive Tenant A's resources (`HTTP 404`).
 
 ---
 
@@ -40,15 +53,12 @@ cd webhook-delivery-service-assignment/backend
 Start PostgreSQL and the Spring Boot 4.x backend service:
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
-The service will be accessible at `http://localhost:8080`.
-
-Verify service health:
-```bash
-curl http://localhost:8080/actuator/health
-```
+- **Dashboard**: Access `http://localhost:8080` in your browser.
+- **API Base**: `http://localhost:8080/api/v1`
+- **Health Check**: `curl http://localhost:8080/actuator/health`
 
 ---
 
