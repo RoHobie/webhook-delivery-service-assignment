@@ -13,6 +13,7 @@ For detailed technical design documents, API specifications, and architectural r
 - **[System Architecture](docs/ARCHITECTURE.md)**: Covers the ingestion pipeline, fan-out matching, database-level claim concurrency engine (`FOR UPDATE SKIP LOCKED`), virtual thread dispatching, and crash recovery.
 - **[REST API Reference & Webhook Verification Guide](docs/API_DOCUMENTATION.md)**: Contains complete API endpoint specifications, JSON request/response examples, and consumer signature verification code snippets in Java, Node.js, and Python.
 - **[Design Decisions & Rationale](docs/DESIGN_DECISIONS.md)**: Explains the architectural trade-offs, engineering choices, and alignment with non-functional requirements.
+- **[Testing & Verification Guide](docs/TESTING.md)**: Details the test suite architecture, Testcontainers PostgreSQL setup, WireMock HTTP stubs, concurrency testing, and scenario evaluation matrix.
 
 ---
 
